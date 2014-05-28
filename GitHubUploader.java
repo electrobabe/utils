@@ -1,26 +1,35 @@
+package at.electrobabe.utils;
+
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileReader;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * util class for uploading binaries (APK) to github
  *
  * @author electrobabe
+ * @version version 0.2
  */
 public class GitHubUploader {
-    private final static String GITHUB_API_URL = "https://api.github.com/repos/:user/:repo/";
 
-    private final static String GITHUB_API_RELEASES_URL = GITHUB_API_URL + "releases?per_page=1";
-    // OAUTH_TOKEN for github
-    private static final String AUTH_TOKEN = "mysecret";
+    private static final Logger logger = Logger.getLogger("GitHubUploader");
+
+    private static final String GITHUB_API_URL = "https://api.github.com/repos/:user/:repo/";
+
+    private static final String GITHUB_API_RELEASES_URL = GITHUB_API_URL + "releases?per_page=1";
+    // OAUTH_TOKEN of github user
+    private static final String AUTH_TOKEN = ":token";
 
     private static final String UPLOAD_URL_PREFIX = "\"upload_url\":\"";
     private static final String UPLOAD_URL_SUFFIX = "{?name}\"";
@@ -31,11 +40,13 @@ public class GitHubUploader {
 
     private static final String ASSET_URL = GITHUB_API_URL + "releases/assets/";
 
+    private static final int BUFFER_SIZE = 4096;
+
     /**
      * @param args [0] filename required
      */
     public static void main(String[] args) {
-        System.out.println("Start GitHubUploader");
+        logger.log(Level.INFO, "Start GitHubUploader");
 
         String fileName = args[0];
         String url = getUploadUrl(fileName);
@@ -67,19 +78,17 @@ public class GitHubUploader {
 
             int retCode = conn.getResponseCode();
 
-            System.out.println("POST ok with " + retCode + " " + url + "?name=" + file.getName());
+            logger.log(Level.INFO, "POST ok with " + retCode + " " + url + "?name=" + file.getName());
 
             if (retCode == 201) {
-                System.out.println("Upload of " + file.getName() + " to " + url + " was successful");
+                logger.log(Level.INFO, "Upload of " + file.getName() + " to " + url + " was successful");
             } else {
-                System.out.println("Error uploading " + file.getName() + " to " + url);
+                logger.log(Level.INFO, "Error uploading " + file.getName() + " to " + url);
                 System.exit(-retCode);
             }
 
-
         } catch (Exception e) {
-            System.out.println("Error in uploadFile. Maybe file exists at GitHub?");
-            e.printStackTrace();
+            logger.log(Level.SEVERE, "Error in uploadFile. Maybe file exists at GitHub?");
 
         } finally {
 
@@ -92,37 +101,51 @@ public class GitHubUploader {
     /**
      * write file to stream
      *
-     * @param conn HttpURLConnection
-     * @param file File
+     * @param conn     HttpURLConnection
+     * @param fileFile File
      * @throws IOException
      */
-    private static void writeData(HttpURLConnection conn, File file) throws IOException {
+    private static void writeData(HttpURLConnection conn, File fileFile) throws IOException {
 
-        OutputStream os = conn.getOutputStream();
-        BufferedWriter writer;
-        writer = new BufferedWriter(new OutputStreamWriter(os, "UTF-8"));
+        final String CRLF = "\r\n";
+        final String BOUNDARY = "*****";
 
-        writer.write(getFileAsString(file));
-        writer.flush();
-        writer.close();
-        os.close();
+        OutputStream output = conn.getOutputStream();
+
+        PrintWriter writer = new PrintWriter(new OutputStreamWriter(output, "UTF-8"), true);
+        // set some headers with writer
+        InputStream file = new ByteArrayInputStream(getFileAsByteArray(fileFile));
+        System.out.println("Size: " + file.available());
+
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int length;
+        while ((length = file.read(buffer)) > 0) {
+            output.write(buffer, 0, length);
+        }
+        output.flush();
+        writer.append(CRLF).flush();
+        writer.append("--").append(BOUNDARY).append("--").append(CRLF).flush();
+
+        output.close();
     }
 
-    private static String getFileAsString(File file) throws IOException {
-        StringBuilder buffer = new StringBuilder();
-        FileReader fr = new FileReader(file);
-        BufferedReader br = new BufferedReader(fr);
-        String str;
-        while ((str = br.readLine()) != null) {
-            buffer.append(str);
-        }
-        return buffer.toString();
+    static byte[] getFileAsByteArray(File file) throws IOException {
+
+        FileInputStream fileStream = new FileInputStream(file);
+
+        // Instantiate array
+        byte[] arr = new byte[(int) file.length()];
+
+        /// read All bytes of File stream
+        int i = fileStream.read(arr, 0, arr.length);
+
+        return arr;
     }
 
     /**
-     * @return String e.g. https://uploads.github.com/repos/keyosk-tablets/keyosk-android/releases/294726/assets
+     * @return String e.g. https://uploads.github.com/repos/:user/:repo/releases/123/assets
      */
-    private static String getUploadUrl(String fileName) {
+    static String getUploadUrl(String fileName) {
         HttpURLConnection conn = null;
 
         try {
@@ -140,15 +163,14 @@ public class GitHubUploader {
 
             String tag = ret.substring(ret.indexOf(TAG_PREFIX) + TAG_PREFIX.length());
             tag = tag.substring(0, tag.indexOf("\""));
-            System.out.println("tag: " + tag);
+            logger.log(Level.INFO, "tag: " + tag);
 
             deleteOldAsset(ret.toString(), fileName);
 
             return ret.substring(ret.indexOf(UPLOAD_URL_PREFIX) + UPLOAD_URL_PREFIX.length(), ret.indexOf(UPLOAD_URL_SUFFIX));
 
         } catch (Exception e) {
-            System.out.println("error in getUploadUrl");
-            e.printStackTrace();
+            logger.log(Level.SEVERE, "error in getUploadUrl");
 
         } finally {
 
@@ -163,9 +185,9 @@ public class GitHubUploader {
         String searchValue = ASSET_NAME_PREFIX + new File(fileName).getName() + "\"";
 
         if (s.contains(searchValue)) {
-            System.out.println("Asset " + new File(fileName).getName() + " already exists, delete old asset");
+            logger.log(Level.INFO, "Asset " + new File(fileName).getName() + " already exists, delete old asset");
 
-            // "assets":[{"url":"https://api.github.com/repos/keyosk-tablets/keyosk-android/releases/assets/125222","id":125222,
+            // "assets":[{"url":"https://api.github.com/repos/:user/:repo/releases/assets/123","id":123,
             String assetId = s.substring(s.indexOf("\"assets\""), s.indexOf(searchValue));
             assetId = assetId.substring(assetId.lastIndexOf(ASSET_ID_PREFIX) + ASSET_ID_PREFIX.length());
 
@@ -184,11 +206,10 @@ public class GitHubUploader {
                 conn.connect();
 
                 int retCode = conn.getResponseCode();
-                System.out.println("DELETE ok with " + retCode + " " + ASSET_URL + assetId);
+                logger.log(Level.INFO, "DELETE ok with " + retCode + " " + ASSET_URL + assetId);
 
             } catch (Exception e) {
-                System.out.println("error in getUploadUrl");
-                e.printStackTrace();
+                logger.log(Level.SEVERE, "error in getUploadUrl");
 
             } finally {
 
